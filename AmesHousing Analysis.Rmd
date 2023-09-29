@@ -1,0 +1,248 @@
+---
+title: "Analysis of Ames Housing Dataset"
+output: html_document
+date: "August 5th, 2022"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction 
+
+- In this project we will investigate which predictors are the most useful to predict the  sales price of the house. The dataset used in this project can be found here - https://www.kaggle.com/datasets/prevek18/ames-housing-dataset. It contains 81 variables that describe a wide variety of characteristics of the 2,930 houses that were sold in the Ames, Iowa, between the years 2006 and 2010.Some of these characteristics include lot shape, land contour, foundation, garage finish, etc. The objective is to find the best model for predicting the sales price of the particular house and whether or not it is possible to accurately predict the price at which the property will be sold.
+
+# Methods
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+library(caret)
+library(lmtest)
+library(knitr)
+library(fastDummies)
+library(reshape2)
+library(ggplot2)
+```
+
+## 1.1. Data Cleaning
+
+Let's import and take a look at the structure of the data 
+
+```{r}
+ames <- read.csv("AmesHousing.csv")
+print(str(ames))
+```
+### Some Observations 
+Observe that there are 82 different variables in the data. Some of them are numerical and some of them are cathegorical. We can also see some NA values in the data. Now to clean the data, we will apply the following operations in the next chunk:
+
+  1. Remove the near zero variance predictors
+  2. Remove Order (just the order of houses) and PID (unique house identifier)
+  3. Calculate the share of missing data for each column.
+  4. Seperate the cathegorical and numerical columns for missing data.
+  
+  
+```{r}
+# remove near zero variance predictors
+nzv <- nearZeroVar(ames)
+ames <- ames[, -nzv]
+
+# remove Order (just the order of houses), PID (unique house identifier)
+ames <- subset(ames, select = -c(Order, PID))
+
+# get count and percentage of missing values in columns with missing values
+na_count <- sapply(ames, function(y) sum(length(which(is.na(y)))))
+na_count / nrow(ames)
+
+#get the number of columns with missing data that are numeric or factor
+missing_data_columns <- subset(ames, select = names(na_count[na_count > 0]))
+numerical_columns <- missing_data_columns[, unlist(lapply(missing_data_columns, is.numeric), use.names = FALSE)] 
+character_columns <- missing_data_columns[, unlist(lapply(missing_data_columns, is.character), use.names = FALSE)]
+
+# get the number of columns with NA vaules:
+print("# of numerical columns with NA values is:")
+print(length(numerical_columns))
+print("# of cathegorical columns with NA values is:")
+print(length(character_columns))
+```
+Now we will fill the NA values with appropriate values. Here is the details for each columns:
+
+### Numerical columns:
+ Column Name (Default value I want to fill in for NA)
+ "Lot.Frontage"(0), "Mas.Vnr.Area"(0), 
+ "BsmtFin.SF.1"(0), "Bsmt.Unf.SF"(0), "Total.Bsmt.SF"(0), "Bsmt.Full.Bath"(0),
+ "Bsmt.Half.Bath"(0), "Garage.Yr.Blt"(Same as the YearBuilt), 
+ "Garage.Cars"(0), "Garage.Area"(0)
+
+
+### Cathegorical Columns:
+ Column Name (Default value I want to fill in for NA)
+ "Alley" ("None"), "Bsmt.Qual"("No_Basement"), "Bsmt.Exposure"("No_Basement"), 
+ "BsmtFin.Type.1"("None"), "Fireplace.Qu"("None"), "Garage.Type" ("None"), "Garage.Finish" ("None"),  
+ "Pool.QC"("None"), "Fence" ("None"), "Misc.Feature" ("None")
+ 
+```{r}
+### Numerical columns:
+
+zero_value_columns <- c("Mas.Vnr.Area", "BsmtFin.SF.1", "Bsmt.Unf.SF", "Total.Bsmt.SF", "Bsmt.Full.Bath", 
+                        "Bsmt.Half.Bath","Garage.Cars", "Garage.Area", "Lot.Frontage")
+ames[zero_value_columns][is.na(ames[zero_value_columns])] <- 0
+
+ames$Garage.Yr.Blt <- ifelse(is.na(ames$Garage.Yr.Blt), ames$Year.Built, ames$Garage.Yr.Blt)
+
+#Cathegorical columns:
+none_columns = c("Alley", "BsmtFin.Type.1", "Fireplace.Qu", "Garage.Type", 
+                 "Garage.Finish", "Pool.QC", "Fence", "Misc.Feature")
+no_basement_columns = c("Bsmt.Qual", "Bsmt.Exposure")
+
+ames[none_columns][is.na(ames[none_columns])] <- "None"
+ames[no_basement_columns][is.na(ames[no_basement_columns])] <- "No Basement"
+```
+ Now we have handled the NA values. Thw next thing we will do is converting the categorical data to numerical values. There are two options for each categorical column, we can either convert it to a dummy variable or to a factorized variable if there is hierarchical relationship between elements. We should make our analysis one by one for each variable.
+```{r}
+str(ames[, unlist(lapply(ames, is.character), use.names = FALSE)])
+```
+ As we see from above, there are 31 chategorical variable in the data. We will convert following variables to dummy and the remaining will be factorized.
+ 
+#### Dummy variables:
+ MS.Zoning, Lot.Config, Neighborhood, Condition.1, Bldg.Type, House.Style, Roof.Style, Exterior.1st, Exterior.2nd, Mas.Vnr.Type, Foundation, Electrical, Garage.Type, Misc.Feature, Sale.Type, Sale.Condition
+ 
+#### Factorized variables:
+ Alley, Lot.Shape, Exter.Qual, Exter.Cond, Bsmt.Qual, Bsmt.Exposure, BsmtFin.Type.1, Heating.QC, Central.Air, Kitchen.Qual, Fireplace.Qu, Garage.Finish, Paved.Drive, Pool.QC, Fence
+ 
+```{r}
+dum_var_names = c("MS.Zoning", "Lot.Config", "Neighborhood", "Condition.1", "Bldg.Type", "House.Style", "Roof.Style", "Exterior.1st", "Exterior.2nd", "Mas.Vnr.Type", "Foundation", "Electrical", "Garage.Type", "Misc.Feature", "Sale.Type", "Sale.Condition")
+
+ames <- fastDummies::dummy_cols(ames,select_columns =dum_var_names, remove_first_dummy = TRUE)
+ames <- ames[ , !(names(ames) %in% dum_var_names)]
+
+
+# Factorizations:
+
+ames$Alley          <- as.numeric(ordered(ames$Alley, levels = c("None", "Pave", "Grvl")))
+ames$Lot.Shape      <- as.numeric(ordered(ames$Lot.Shape, levels = c("IR3", "IR2", "IR1", "Reg")))
+ames$Exter.Qual     <- as.numeric(ordered(ames$Exter.Qual, levels = c("Po", "Fa", "TA", "Gd", "Ex")))
+ames$Exter.Cond     <- as.numeric(ordered(ames$Exter.Cond, levels = c("Po", "Fa", "TA", "Gd", "Ex")))
+ames$Bsmt.Qual      <- as.numeric(ordered(ames$Bsmt.Qual, levels = c("No Basement", "Po", "Fa", "TA", "Gd", "Ex")))
+ames$Bsmt.Exposure  <- as.numeric(ordered(ames$Bsmt.Exposure, levels = c("No Basement", "No", "Mn", "Av", "Gd")))
+ames$BsmtFin.Type.1 <- as.numeric(ordered(ames$BsmtFin.Type.1, levels = c("None", "Unf", "LwQ", "Rec", "BLQ", "ALQ", "GLQ")))
+
+ames$Heating.QC   <- as.numeric(ordered(ames$Heating.QC, levels = c("Po", "Fa", "TA", "Gd", "Ex")))
+ames$Central.Air  <- as.numeric(ordered(ames$Central.Air, levels = c("N", "Y")))
+ames$Kitchen.Qual <- as.numeric(ordered(ames$Kitchen.Qual, levels = c("Po", "Fa", "TA", "Gd", "Ex")))
+ames$Fireplace.Qu <- as.numeric(ordered(ames$Fireplace.Qu, levels = c("None","Po", "Fa", "TA", "Gd", "Ex")))
+ames$Garage.Finish<- as.numeric(ordered(ames$Garage.Finish, levels = c("None", "Unf", "RFn", "Fin")))
+ames$Paved.Drive  <- as.numeric(ordered(ames$Paved.Drive, levels = c("N", "Y")))
+ames$Pool.QC      <- as.numeric(ordered(ames$Pool.QC, levels = c("None", "Fa", "TA", "Gd", "Ex")))
+ames$Fence        <- as.numeric(ordered(ames$Fence, levels = c("None", "MnWw", "GdWo", "MnPrv", "GdPrv")))
+
+
+```
+ Now the data is ready for modelling.
+ 
+## 1.2. Modelling:
+
+### Train Test Split:
+```{r}
+set.seed(1)
+ames_trn_idx  = sample(nrow(ames), size = trunc(0.70 * nrow(ames)))
+ames_trn_data = ames[ames_trn_idx, ]
+ames_tst_data = ames[-ames_trn_idx, ]
+```
+### Base model:
+
+We will first construct a base model with all variables in X.
+
+```{r}
+model1 <- lm(SalePrice ~., data = ames_trn_data)
+summary(model1)
+
+```
+Build a new model by dropping the insignificant variables.
+
+```{r}
+vars_to_drop <- c("MS.SubClass", "Alley", "Lot.Shape", "Year.Remod.Add", "Exter.Cond", "Heating.QC", "Central.Air", "X1st.Flr.SF", "X2nd.Flr.SF", "Bsmt.Full.Bath", "Bsmt.Half.Bath", "Full.Bath", "TotRms.AbvGrd", "Fireplaces", "Fireplace.Qu", "Garage.Yr.Blt", "Garage.Finish", "Paved.Drive", "Fence", "Mo.Sold", "Yr.Sold", "`MS.Zoning_C (all)`","MS.Zoning_FV", "`MS.Zoning_I (all)`", "MS.Zoning_RH", "MS.Zoning_RL", "MS.Zoning_RM", "Electrical_FuseA", "Electrical_FuseF", "Electrical_FuseP", "Electrical_Mix", "Electrical_SBrkr" )
+
+model2 <- lm(SalePrice ~. -MS.SubClass - Alley - Lot.Shape - Year.Remod.Add - Exter.Cond - Heating.QC - Central.Air - X1st.Flr.SF - X2nd.Flr.SF - Bsmt.Full.Bath - Bsmt.Half.Bath - Full.Bath - TotRms.AbvGrd - Fireplaces - Fireplace.Qu - Garage.Yr.Blt -  Garage.Finish - Paved.Drive - Fence - Mo.Sold - Yr.Sold - `MS.Zoning_C (all)` - MS.Zoning_FV - `MS.Zoning_I (all)` -  MS.Zoning_RH - MS.Zoning_RL - MS.Zoning_RM - Electrical_FuseA - Electrical_FuseF - Electrical_FuseP - Electrical_Mix - Electrical_SBrkr
+             , data = ames_trn_data)
+
+summary(model2)
+```
+# Results
+
+```{r}
+
+#Diagnostic functions for models
+get_bp_decision = function(model, alpha) { 
+  decide = unname(bptest(model)$p.value < alpha) 
+  ifelse(decide, "Reject", "Fail to Reject")
+}
+get_sw_decision = function(model, alpha) {
+  decide = unname(shapiro.test(resid(model))$p.value < alpha) 
+  ifelse(decide, "Reject", "Fail to Reject")
+}
+
+get_num_params = function(model) { 
+  length(coef(model))
+}
+
+get_loocv_rmse = function(model) { 
+  sqrt(mean((resid(model) / (1 - hatvalues(model))) ^ 2))
+}
+
+get_adj_r2 = function(model) { 
+  summary(model)$adj.r.squared
+}
+
+#Create table of statistics
+create_diagnostic_table = function(model, alpha) {
+  tests = c("BP Test", "Shapiro Wilk Test", "Num Params", "LOOCV RMSE", "Adj R2")
+  values = c(get_bp_decision(model, alpha), get_sw_decision(model, alpha), 
+             get_num_params(model), get_loocv_rmse(model), get_adj_r2(model))
+  table = data.frame(tests, values)
+  colnames(table) = c("Diagnostics", "Values")
+  kable(table)
+}
+
+print(create_diagnostic_table(model1, 0.95))
+print(create_diagnostic_table(model2, 0.95))
+```
+Observe that we reject the Null hyp. of BP test Which states that the error variances are all constant. Therefore, our error variances changes over observations to observation.
+
+We also reject the null hypothesis for Shapiro Wilk Test which is the errors are normally distributed Therefore, our error terms seem to be fail also having the normal distribution.
+
+```{r, message = FALSE, warning = FALSE}
+plot(model1)
+```
+
+Eventhough the test statistics rejects the null hypothesis in BP test the problem seem to be the outlier values espacially the ones with extreme prices. Our model1 seem to be working fine from the residual plot at least for the houses with normal prices.
+
+If we look at the QQ plot, again we see some problems with the extreme values while we have normality in usual prices. Therefore, the visualizations are provides a big support for our model.
+
+```{r, message = FALSE, warning = FALSE}
+plot(model2)
+```
+
+- The same observations can be made also for model 2. 
+
+## Predictions of the test set:
+
+Both models are performing similarly. Therefore, we will use model2 for the predictions as it has less variables.
+
+```{r, message = FALSE, warning = FALSE}
+# create dataframe with actual and predicted values
+plot_data <- data.frame(Predicted_value = predict(model2, ames_tst_data ),  
+                       Observed_value = ames_tst_data$SalePrice)
+  
+# plot predicted values and actual values
+ggplot(plot_data, aes(x = Predicted_value, y = Observed_value)) +
+                  geom_point() +
+                 geom_abline(intercept = 0, slope = 1, color = "green")
+
+```
+
+- The performance of our model for the test set seems to be good. We again observe some problems with extremely high prices.
+
+# Discussion
+
+The both linear models we built seem to be working similarly. They both fail for  BP and Shapiro Wilk Tests. However, the reason behind rejection seem to be the extremly high prices. As they are outliers, it is difficult to predict for those prices. Also, there are some unobservable factors for the extremely high priced houses like prestige, rare luxury etc. Therefore, our models with 90% adjusted R square performs good enough to make predictions on normal priced houses.
+
+ 
